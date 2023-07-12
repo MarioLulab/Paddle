@@ -43,11 +43,11 @@ def train(layer, loader, loss_fn, opt):
             opt.step()
             opt.clear_grad()
             print("Epoch {} batch {}: loss = {}".format(
-                epoch_id, batch_id, np.mean(loss.numpy())))
+                epoch_id, batch_id, float(loss)))
 
 # create network
 layer = LinearNet()
-layer = paddle.jit.to_static(layer) # <----通过函数式调用 paddle.jit.to_static(layer) 一键实现动转静
+# layer = paddle.jit.to_static(layer) # <----通过函数式调用 paddle.jit.to_static(layer) 一键实现动转静
 loss_fn = nn.CrossEntropyLoss()
 adam = opt.Adam(learning_rate=0.001, parameters=layer.parameters())
 
@@ -61,3 +61,13 @@ loader = paddle.io.DataLoader(dataset,
 
 # train
 train(layer, loader, loss_fn, adam)
+
+
+# save
+layer.eval()
+path = "demo_dy2st_train_func/linear"
+# paddle.jit.save(layer, path)      # 隐含了 「动转静」 动作
+input_spec = paddle.static.InputSpec([None, IMAGE_SIZE], "float32", 'x')
+paddle.jit.save(layer, 
+                path,
+                input_spec=[input_spec])    # if layer is not static graph

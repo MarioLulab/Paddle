@@ -43,11 +43,14 @@ def convert_attr(x, attr):
 
 
 def convert_load(x):
-    if in_declarative_mode() and isinstance(x, paddle.fluid.core.eager.Tensor):
-        """
-        TODO:(@xiongkun) may run convert_load in dygraph mode, which should be fixed.
-        """
-        return _convert_into_variable(x)
+    if in_declarative_mode():
+        if isinstance(x, paddle.fluid.core.eager.Tensor):
+            """
+            TODO:(@xiongkun) may run convert_load in dygraph mode, which should be fixed.
+            """
+            return _convert_into_variable(x)
+        elif isinstance(x, paddle.autograd.PyLayer):
+            return _convert_pyLayer_into_static(x)
     return x
 
 
