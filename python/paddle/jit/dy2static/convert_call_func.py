@@ -25,6 +25,7 @@ from typing import Any, List
 import numpy
 
 from paddle.nn import Layer
+from paddle.autograd.py_layer import PyLayerMeta
 
 from .convert_operators import (
     convert_enumerate,
@@ -218,6 +219,9 @@ def convert_call(func):
 
     if is_builtin(func, "print"):
         return convert_print
+
+    if hasattr(func, "__self__") and isinstance(func.__self__, PyLayerMeta):
+        print("########### okkkkkkkk ###########")
 
     if is_builtin(func) or is_unsupported(func):
         return func
