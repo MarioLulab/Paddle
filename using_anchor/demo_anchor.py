@@ -4,19 +4,18 @@ from paddle.jit import to_static
 
 class cus_tanh(PyLayer):
     @staticmethod
-    @to_static
     def forward(ctx, x): 
         # ctx is a context object that store some objects for backward.
         y = paddle.tanh(x)       # <------ 仅仅包含 Paddle API 的计算
         # Pass tensors to backward.
-        ctx.save_for_backward(y)
+        # ctx.save_for_backward(y)
         return y
 
     @staticmethod
     # forward has only one output, so there is only one gradient in the input of backward.
     def backward(ctx, dy):
         # Get the tensors passed by forward.
-        y = ctx.saved_tensor()
+        # y = ctx.saved_tensor()
         grad = dy * (1 - paddle.square(y))   # <------ 仅仅包含 Paddle API 的计算
         # forward has only one input, so only one gradient tensor is returned.
         return grad
@@ -35,19 +34,22 @@ class SimpleNet(paddle.nn.Layer):
         return out
 
 
+
 if __name__ == '__main__':
     net = SimpleNet()
     paddle.jit.set_code_level(100)
     x = paddle.ones([2,4], 'float32')
+    x.stop_gradient = True
     # cus_tanh_apply = cus_tanh.apply
     # a = paddle.jit.dy2static.convert_call_func.convert_call(cus_tanh_apply)(x)
     # a = paddle.jit.dy2static.convert_call_func.convert_call(cus_tanh.apply)(x)
+    # a = paddle.jit.dy2static.convert_call_func.convert_call(net)(x)
 
     # forward
-    # out = net(x)
+    out = net(x)
     # print(out)
     # backward
     # out = out.mean()
     # out.backward()
-    print(cus_tanh.forward.code)
+    # print(cus_tanh.forward.code)
     print("=== end ===")

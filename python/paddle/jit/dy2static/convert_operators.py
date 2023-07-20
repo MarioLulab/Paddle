@@ -49,8 +49,6 @@ def convert_load(x):
             TODO:(@xiongkun) may run convert_load in dygraph mode, which should be fixed.
             """
             return _convert_into_variable(x)
-        elif isinstance(x, paddle.autograd.PyLayer):
-            return _convert_pyLayer_into_static(x)
     return x
 
 
