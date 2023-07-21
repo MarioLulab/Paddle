@@ -60,6 +60,8 @@ from .sequence_lod import sequence_reverse  # noqa: F401
 
 from .control_flow import cond
 
+from .static_pylayer import do_static_pylayer
+
 __all__ = [  # noqa
     'fc',
     'batch_norm',
@@ -73,6 +75,7 @@ __all__ = [  # noqa
     'conv3d_transpose',
     'data_norm',
     'deform_conv2d',
+    'do_static_pylayer',
     'group_norm',
     'instance_norm',
     'layer_norm',

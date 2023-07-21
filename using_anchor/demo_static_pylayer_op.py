@@ -2,18 +2,14 @@ import numpy as np
 
 import paddle
 import paddle.static as static
+from paddle.static.nn import static_pylayer
 
 paddle.enable_static()
 
-def true_func():
-    return paddle.full(shape=[1, 2], dtype='int32',
-                        fill_value=1)
+def forward_fn(x):
+    y = paddle.mean(x)
+    return y
 
-def false_func():
-    return paddle.full(shape=[3, 4], dtype='float32',
-                        fill_value=3)
-
- # 当输入为单个张量时
 train_program = static.Program()
 start_program = static.Program()
 
@@ -21,12 +17,9 @@ place = paddle.CPUPlace()
 exe = paddle.static.Executor(place)
 with static.program_guard(train_program, start_program):
     data = paddle.static.data(name="X", shape=[None, 5], dtype="float32")
-    pred = paddle.mean(data) > 1.5
-    ret = paddle.static.nn.cond(pred, true_func, false_func)
-
-    # print(static.default_main_program(), file=open("program.txt", 'w'))
+    ret = static_pylayer.do_static_pylayer(forward_fn, [x])
     print(static.default_main_program())
-    
+
 exe = paddle.static.Executor(place)
 exe.run(start_program)
 x = np.random.randn(10, 5).astype(np.float32)
