@@ -115,6 +115,8 @@ void OpCompatibleMap::InitOpCompatibleMap() {
   op_compatible_map_["chunk_eval"] = {"1.6.0", OpCompatibleType::possible};
   op_compatible_map_["conditional_block"] = {"1.6.0",
                                              OpCompatibleType::possible};
+  op_compatible_map_["static_pylayer"] = {"1.6.0",
+                                             OpCompatibleType::possible};
   op_compatible_map_["conditional_block_infer"] = {"1.6.0",
                                                    OpCompatibleType::possible};
   op_compatible_map_["conv2d"] = {"1.6.0", OpCompatibleType::possible};
