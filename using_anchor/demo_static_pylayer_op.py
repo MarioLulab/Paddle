@@ -17,7 +17,7 @@ place = paddle.CPUPlace()
 exe = paddle.static.Executor(place)
 with static.program_guard(train_program, start_program):
     data = paddle.static.data(name="X", shape=[None, 5], dtype="float32")
-    ret = static_pylayer.do_static_pylayer(forward_fn, [x])
+    ret = static_pylayer.do_static_pylayer(forward_fn, [data])
     print(static.default_main_program())
 
 exe = paddle.static.Executor(place)

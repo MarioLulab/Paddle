@@ -39,10 +39,72 @@ __all__ = [
     'StaticPyLayerBlock',
 ]
 
+# NOTE: copy from control flow...
+# (TODO: Mine) There exists dependency. It will be removed later.
+def get_inputs_outputs_in_block(
+    current_block, inner_inputs, inner_outputs, helper
+):
+    """
+    Find inputs and outputs in current control flow block.
+    :param current_block: Current control flow block.
+    :param inner_inputs: Input var name of ops in current block.
+    :param inner_outputs: Output var name of ops in current block.
+    :return: inner_inputs, inner_outputs
+    """
+
+    def is_ignore_vars(op, var_name):
+        # NOTE(dev): There are some persistable var created in some non-standard API
+        # such as "contrib.layers.shuffle_batch". It create a "Seed" used both in
+        # Input and Output. This var shall not be considered as a loop_var in
+        # control_flow.
+        IGNORE_VAR_NAMES = {"shuffle_batch": ["shuffle_batch_seed"]}
+        if op.type in IGNORE_VAR_NAMES:
+            var_names = IGNORE_VAR_NAMES[op.type]
+            for name in var_names:
+                if name in var_name:
+                    return True
+        return False
+
+    # Step1: update inner_inputs and inner_outputs
+    # NOTE: Here assumes that all variables are input or output of Ops,
+    # but some variables are created without appendding a real op.
+    # For example, in `arr = create_array(dtype)`, `arr` is not a output of a op.
+    for op in current_block.ops:
+        assert isinstance(op, Operator)
+        for iname in op.input_names:
+            for in_var_name in op.input(iname):
+                if in_var_name not in inner_outputs and not is_ignore_vars(
+                    op, in_var_name
+                ):
+                    inner_inputs.add(in_var_name)
+
+        for oname in op.output_names:
+            for out_var_name in op.output(oname):
+                inner_outputs.add(out_var_name)
+
+    # Step2: Remove LOD_TENSOR_ARRAY created in current control flow block.
+    remove_inner_inputs = set()
+    parent_block = helper.main_program.block(current_block.parent_idx)
+
+    for in_var_name in inner_inputs:
+        parent_block_var = parent_block._find_var_recursive(in_var_name)
+        current_block_var = None
+        if current_block.has_var(in_var_name):
+            current_block_var = current_block.var(in_var_name)
+        if (
+            not parent_block_var
+            and current_block_var
+            and current_block_var.type == core.VarDesc.VarType.LOD_TENSOR_ARRAY
+        ):
+            remove_inner_inputs.add(in_var_name)
+
+    inner_inputs = inner_inputs - remove_inner_inputs
+
+    return inner_inputs, inner_outputs
 
 class StaticPyLayerBlockGuard(BlockGuard):
     def __init__(self, block):
-        check_type(block, "block", StaticPyLayerBlock)
+        check_type(block, "block", StaticPyLayerBlock, "StaticPyLayerBlockGuard")
         super().__init__(block.helper.main_program)
         self.block = block
     
@@ -83,7 +145,7 @@ class StaticPyLayerBlock:
             if inner_var:
                 out_list.append(inner_var)
 
-        static_pylayer_op = parent_block.append(
+        static_pylayer_op = parent_block.append_op(
             type='static_pylayer',
             inputs={
                 'Input': param_list,

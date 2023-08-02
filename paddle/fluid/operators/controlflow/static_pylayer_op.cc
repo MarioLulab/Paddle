@@ -25,7 +25,6 @@ class StaticPyLayerOp : public framework::OperatorBase {
         void RunImpl(const framework::Scope & scope,
                     const platform::Place &dev_place) const override {
         // do nothing
-        #if 1
         auto *scope_var = scope.FindVar(Output(kScope));
         PADDLE_ENFORCE_NOT_NULL(
         scope_var,
@@ -68,7 +67,6 @@ class StaticPyLayerOp : public framework::OperatorBase {
         }
 
         core_->Run({}, false);
-        #endif
 
         }
 
@@ -174,6 +172,8 @@ class StaticPyLayerGradMaker : public framework::SingleGradOpMaker<T> {
             grad_op->SetType("static_pylayer_grad");
             grad_op->SetInput(framework::GradVarName(kOutputs),
                               this->OutputGrad(kOutputs));
+            grad_op->SetInput(kScope,
+                            this->Output(kScope));
 
             auto fwd_inputs = this->InputGrad(kInputs, false);
             FilterNoGradInput<T>::filter(this->GetForwardOpBlock(), &fwd_inputs);
@@ -185,6 +185,7 @@ class StaticPyLayerGradMaker : public framework::SingleGradOpMaker<T> {
 
 }   // namespace operators
 }   // namespace
+
 
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(static_pylayer,

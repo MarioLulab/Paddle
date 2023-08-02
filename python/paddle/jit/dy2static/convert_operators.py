@@ -21,7 +21,7 @@ from paddle.fluid.dygraph.base import (
     in_declarative_mode,
 )
 from paddle.fluid.framework import Variable, core
-from paddle.fluid.layers import control_flow
+from paddle.fluid.layers import control_flow, static_pylayer
 from paddle.fluid.layers.control_flow import while_loop
 
 from .utils import (
@@ -43,12 +43,11 @@ def convert_attr(x, attr):
 
 
 def convert_load(x):
-    if in_declarative_mode():
-        if isinstance(x, paddle.fluid.core.eager.Tensor):
-            """
-            TODO:(@xiongkun) may run convert_load in dygraph mode, which should be fixed.
-            """
-            return _convert_into_variable(x)
+    if in_declarative_mode() and isinstance(x, paddle.fluid.core.eager.Tensor):
+        """
+        TODO:(@xiongkun) may run convert_load in dygraph mode, which should be fixed.
+        """
+        return _convert_into_variable(x)
     return x
 
 
@@ -136,6 +135,14 @@ def _convert_tensor_arrray_if_necessary(setterhelper, push_pop_names):
     setterhelper.set(
         push_pop_names, [maybe_to_tensor_array(v) for v in push_pop_vars]
     )
+
+# def _run_static_pylayer_forward(
+#     fn, var_list
+# ):
+#     # NOTE: var_list of Paddle op `static_pylayer.do_static_pylayer` must be Paddle Variable.
+#     var_list = [to_static_variable(var) for var in var_list]
+#     var_list = static_pylayer.do_static_pylayer(fn, var_list)
+#     return var_list
 
 
 def _run_paddle_while(
