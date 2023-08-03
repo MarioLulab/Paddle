@@ -9,70 +9,58 @@
 namespace paddle {
 namespace operators {
 
-using InterpreterCore = framework::InterpreterCore;
-
-class StaticPyLayerOp : public framework::OperatorBase {
-
-    public:
-        StaticPyLayerOp(const std::string &type,
-                        const framework::VariableNameMap &inputs,
-                        const framework::VariableNameMap &outputs,
-                        const framework::AttributeMap &attrs)
-                    : framework::OperatorBase(type, inputs, outputs, attrs) {}
+const char StaticPyLayerOp::kInputs[] = "Input";
+const char StaticPyLayerOp::kOutputs[] = "Out";
+const char StaticPyLayerOp::kScope[] = "Scope";
+const char StaticPyLayerOp::kSkipEagerDeletionVars[] = "skip_eager_deletion_vars";
 
 
-    private:
-        void RunImpl(const framework::Scope & scope,
-                    const platform::Place &dev_place) const override {
-        // do nothing
-        auto *scope_var = scope.FindVar(Output(kScope));
-        PADDLE_ENFORCE_NOT_NULL(
-        scope_var,
-        platform::errors::PreconditionNotMet(
-            "Expect Scope variable to be set in static_pylayer_op, but "
-            "got a null Scope variable. Please set the Scope variable."));
+void StaticPyLayerOp::RunImpl(const framework::Scope & scope,
+        const platform::Place &dev_place) const{
+    // do nothing
+    auto *scope_var = scope.FindVar(Output(kScope));
+    PADDLE_ENFORCE_NOT_NULL(
+    scope_var,
+    platform::errors::PreconditionNotMet(
+        "Expect Scope variable to be set in static_pylayer_op, but "
+        "got a null Scope variable. Please set the Scope variable."));
 
-        auto out_scope = scope_var->GetMutable<framework::Scope *>();
-        *out_scope = &scope.NewScope();
-        auto &cur_scope = *out_scope;
+    auto out_scope = scope_var->GetMutable<framework::Scope *>();
+    *out_scope = &scope.NewScope();
+    auto &cur_scope = *out_scope;
 
-        auto *block = Attr<framework::BlockDesc *>("sub_block");
-        VLOG(3) << "Conditional block.idx = " << block->ID()
-                << ", scope = " << cur_scope;
+    auto *block = Attr<framework::BlockDesc *>("sub_block");
+    VLOG(3) << "Conditional block.idx = " << block->ID()
+            << ", scope = " << cur_scope;
 
-        auto &skip_vars =
-            Attr<std::vector<std::string>>(kSkipEagerDeletionVars);
+    auto &skip_vars =
+        Attr<std::vector<std::string>>(kSkipEagerDeletionVars);
 
-        LOG_FIRST_N(INFO, 1)
-            << "[ControlFlow][StaticPyLayer] New Executor is Running.";
+    LOG_FIRST_N(INFO, 1)
+        << "[ControlFlow][StaticPyLayer] New Executor is Running.";
 
-        if (!core_ || !platform::is_same_place(core_->GetPlace(), dev_place)) {
-            VLOG(10) << "[interpreterCore cache]" << core_.get();
-            VLOG_IF(10, core_) << platform::is_same_place(core_->GetPlace(),
-                                                        dev_place);
+    if (!core_ || !platform::is_same_place(core_->GetPlace(), dev_place)) {
+        VLOG(10) << "[interpreterCore cache]" << core_.get();
+        VLOG_IF(10, core_) << platform::is_same_place(core_->GetPlace(),
+                                                    dev_place);
 
-            framework::interpreter::ExecutionConfig execution_config;
-            execution_config.create_local_scope = false;
-            execution_config.used_for_control_flow_op = true;
-            execution_config.skip_gc_vars =
-                std::set<std::string>(skip_vars.begin(), skip_vars.end());
+        framework::interpreter::ExecutionConfig execution_config;
+        execution_config.create_local_scope = false;
+        execution_config.used_for_control_flow_op = true;
+        execution_config.skip_gc_vars =
+            std::set<std::string>(skip_vars.begin(), skip_vars.end());
 
-            core_.reset(new InterpreterCore(
-                dev_place, *block, cur_scope, execution_config));
-            VLOG(10) << "[interpreterCore] created:" << core_;
-        } else {
-            // TODO: Add StaticPyLayer Helper ?
-            BuildScopeForControlFlowOp(*core_, *block, cur_scope);
-            core_->reset_scope(cur_scope);
-        }
+        core_.reset(new framework::InterpreterCore(
+            dev_place, *block, cur_scope, execution_config));
+        VLOG(10) << "[interpreterCore] created:" << core_;
+    } else {
+        // TODO: Add StaticPyLayer Helper ?
+        BuildScopeForControlFlowOp(*core_, *block, cur_scope);
+        core_->reset_scope(cur_scope);
+    }
 
-        core_->Run({}, false);
-
-        }
-
-    private:
-        mutable std::shared_ptr<InterpreterCore> core_{nullptr};
-};
+    core_->Run({}, false);
+}
 
 class StaticPyLayerInferShape : public framework::InferShapeBase {
     public:
@@ -96,16 +84,16 @@ class StaticPyLayerGradOp : public framework::OperatorBase {
         }
 
     private:
-        mutable std::shared_ptr<InterpreterCore> core_{nullptr};
+        mutable std::shared_ptr<framework::InterpreterCore> core_{nullptr};
 };
 
 class StaticPyLayerGradInferShape : public framework::InferShapeBase {
     public:
         void operator()(framework::InferShapeContext *context) const override {
-            if (context->HasInputs(kInputs) &&
-                context->HasOutputs(framework::GradVarName(kInputs))) {
-                    context->SetOutputsDim(framework::GradVarName(kInputs),
-                                    context->GetInputsDim(kInputs));
+            if (context->HasInputs(StaticPyLayerOp::kInputs) &&
+                context->HasOutputs(framework::GradVarName(StaticPyLayerOp::kInputs))) {
+                    context->SetOutputsDim(framework::GradVarName(StaticPyLayerOp::kInputs),
+                                    context->GetInputsDim(StaticPyLayerOp::kInputs));
                 }
         }
 };
@@ -114,17 +102,17 @@ class StaticPyLayerGradInferShape : public framework::InferShapeBase {
 class StaticPyLayerGradInferVarType : public framework::VarTypeInference {
     public:
         void operator()(framework::InferVarTypeContext *ctx) const override {
-            auto input_size = ctx->InputSize(kInputs);
+            auto input_size = ctx->InputSize(StaticPyLayerOp::kInputs);
             auto output_size =
-                ctx->OutputSize(framework::GradVarName(kInputs));
+                ctx->OutputSize(framework::GradVarName(StaticPyLayerOp::kInputs));
             PADDLE_ENFORCE_EQ(input_size,
                             output_size,
                             platform::errors::InvalidArgument(
                                 "input_size and output_size should be equal for "
                                 "static_pylayer_grad_op."));
             for (size_t i = 0; i < output_size; ++i) {
-                ctx->SyncTypeAndDataType(kInputs,
-                                        framework::GradVarName(kInputs),
+                ctx->SyncTypeAndDataType(StaticPyLayerOp::kInputs,
+                                        framework::GradVarName(StaticPyLayerOp::kInputs),
                                         i);
             }
         }
@@ -170,14 +158,14 @@ class StaticPyLayerGradMaker : public framework::SingleGradOpMaker<T> {
     protected:
         void Apply(GradOpPtr<T> grad_op) const override {
             grad_op->SetType("static_pylayer_grad");
-            grad_op->SetInput(framework::GradVarName(kOutputs),
-                              this->OutputGrad(kOutputs));
-            grad_op->SetInput(kScope,
-                            this->Output(kScope));
+            grad_op->SetInput(framework::GradVarName(StaticPyLayerOp::kOutputs),
+                              this->OutputGrad(StaticPyLayerOp::kOutputs));
+            grad_op->SetInput(StaticPyLayerOp::kScope,
+                            this->Output(StaticPyLayerOp::kScope));
 
-            auto fwd_inputs = this->InputGrad(kInputs, false);
+            auto fwd_inputs = this->InputGrad(StaticPyLayerOp::kInputs, false);
             FilterNoGradInput<T>::filter(this->GetForwardOpBlock(), &fwd_inputs);
-            grad_op->SetOutput(framework::GradVarName(kInputs),
+            grad_op->SetOutput(framework::GradVarName(StaticPyLayerOp::kInputs),
                             fwd_inputs);
             grad_op->SetBlockAttr("sub_block", this->grad_block_[0]);
         }
