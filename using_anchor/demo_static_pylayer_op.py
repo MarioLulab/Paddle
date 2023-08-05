@@ -24,5 +24,15 @@ exe = paddle.static.Executor(place)
 exe.run(start_program)
 x = np.random.randn(10, 5).astype(np.float32)
 y = exe.run(train_program, feed={"X":x}, fetch_list = [ret.name])
-print(ret)
+# print(ret)
+print("x = ")
+print(x)
+print("y = ")
 print(y)
+
+# to validate
+numpy_y = np.mean(x)
+print("numpy_y = ")
+print(numpy_y)
+
+np.allclose(y[0], numpy_y)

@@ -25,13 +25,14 @@ void StaticPyLayerOp::RunImpl(const framework::Scope & scope,
         "Expect Scope variable to be set in static_pylayer_op, but "
         "got a null Scope variable. Please set the Scope variable."));
 
-    auto out_scope = scope_var->GetMutable<framework::Scope *>();
-    *out_scope = &scope.NewScope();
-    auto &cur_scope = *out_scope;
+    auto *scopes = scope_var->GetMutable<std::vector<framework::Scope *>>();
+    scopes->resize(1);
+    scopes->front() = &scope.NewScope();
 
+    auto &cur_scope = *scopes->front();
     auto *block = Attr<framework::BlockDesc *>("sub_block");
     VLOG(3) << "Conditional block.idx = " << block->ID()
-            << ", scope = " << cur_scope;
+            << ", scope = " << &cur_scope;
 
     auto &skip_vars =
         Attr<std::vector<std::string>>(kSkipEagerDeletionVars);
@@ -51,12 +52,12 @@ void StaticPyLayerOp::RunImpl(const framework::Scope & scope,
             std::set<std::string>(skip_vars.begin(), skip_vars.end());
 
         core_.reset(new framework::InterpreterCore(
-            dev_place, *block, cur_scope, execution_config));
+            dev_place, *block, &cur_scope, execution_config));
         VLOG(10) << "[interpreterCore] created:" << core_;
     } else {
         // TODO: Add StaticPyLayer Helper ?
-        BuildScopeForControlFlowOp(*core_, *block, cur_scope);
-        core_->reset_scope(cur_scope);
+        BuildScopeForControlFlowOp(*core_, *block, &cur_scope);
+        core_->reset_scope(&cur_scope);
     }
 
     core_->Run({}, false);

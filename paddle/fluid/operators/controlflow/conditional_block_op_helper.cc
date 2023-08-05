@@ -27,6 +27,9 @@ namespace operators {
 
 static bool IsMatchedConditionalBlockOpAndConditionalBlockGradOp(
     const OpVariant &fwd_op, const OpVariant &bwd_op) {
+  // NOTE(luqi): for debug
+  std::string temp = std::string(StaticPyLayerOp::kInputs);
+
   return fwd_op.Outputs().at(ConditionalOp::kScope) ==
          bwd_op.Inputs().at(ConditionalOp::kScope);
 }

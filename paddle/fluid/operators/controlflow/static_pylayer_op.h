@@ -46,7 +46,7 @@ class StaticPyLayerOpProtoMaker : public framework::OpProtoAndCheckerMaker {
         .AsDuplicable();
     // TODO: Use std::vector here ? 
     AddOutput(StaticPyLayerOp::kScope,
-              "(Scope*) The scope of static pylayer block.");
+              "(std::vector<Scope*>) The scope of static pylayer block.");
     AddAttr<framework::BlockDesc *>(
         "sub_block", "The step block of conditional block operator");
     AddComment(R"DOC(StaticPyLayer operator

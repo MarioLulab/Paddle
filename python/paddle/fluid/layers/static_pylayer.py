@@ -145,6 +145,9 @@ class StaticPyLayerBlock:
             if inner_var:
                 out_list.append(inner_var)
 
+        step_scope = parent_block.create_var(
+            type=core.VarDesc.VarType.STEP_SCOPES
+        )
         static_pylayer_op = parent_block.append_op(
             type='static_pylayer',
             inputs={
@@ -152,6 +155,7 @@ class StaticPyLayerBlock:
             },
             outputs={
                 "Out": out_list,
+                "Scope": [step_scope]
             },
             attrs={
                 'sub_block': inside_block,
