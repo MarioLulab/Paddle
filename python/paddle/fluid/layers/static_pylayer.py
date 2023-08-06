@@ -122,12 +122,29 @@ class StaticPyLayerBlock:
         
         self.helper = LayerHelper("static_pylayer_block", name=name)
     
-    def block(self):
+    def block(self, is_backward_block=False):
+        self.is_backward_block = is_backward_block
         return StaticPyLayerBlockGuard(self)
     
-    def complete(self):
+    @property
+    def inside_block_index(self):
+        return self.block_id
+    
+    def complete(self):        
         inside_block = self.helper.main_program.current_block()
         parent_block = self.helper.main_program.block(inside_block.parent_idx)
+
+        self.block_id = inside_block.idx
+        
+        if self.is_backward_block:
+            # set OpRole to `backward`
+            for op in inside_block.ops:
+                op_role_attr_name = core.op_proto_and_checker_maker.kOpRoleAttrName()
+                backward = core.op_proto_and_checker_maker.OpRole.Backward
+                op.desc._set_attr(op_role_attr_name, backward)
+            
+            # exit, because there is no need to append 'static_pylayer' op
+            return
 
         intermediate = set()
         params = set()

@@ -10,6 +10,10 @@ def forward_fn(x):
     y = paddle.mean(x)
     return y
 
+def backward_fn(dx):
+    dy = paddle.sum(dx)
+    return dy
+
 train_program = static.Program()
 start_program = static.Program()
 
@@ -17,7 +21,7 @@ place = paddle.CPUPlace()
 exe = paddle.static.Executor(place)
 with static.program_guard(train_program, start_program):
     data = paddle.static.data(name="X", shape=[None, 5], dtype="float32")
-    ret = static_pylayer.do_static_pylayer(forward_fn, [data])
+    ret = static_pylayer.do_static_pylayer(forward_fn, [data], backward_fn)
     print(static.default_main_program())
 
 exe = paddle.static.Executor(place)

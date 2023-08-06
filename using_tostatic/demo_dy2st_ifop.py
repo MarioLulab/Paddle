@@ -8,7 +8,8 @@ def pylayer_forward(x):
 
 def pylayer_backward(x):
     # z = paddle.max(x)
-    z = x * (1 - paddle.square(x))
+    # z = x * (1 - paddle.square(x))
+    z = paddle.pow(x, 2)
     return z
 
 def loss_func(x):
@@ -22,6 +23,8 @@ def depend_tensor_if(x):
         out = pylayer_forward(x)
     else:
         out = pylayer_backward(x)
+    
+    out = paddle.mean(out)
     return out
 
 if __name__ == "__main__":
@@ -29,8 +32,9 @@ if __name__ == "__main__":
     x = paddle.ones([2,4], 'float32')
     x.stop_gradient = False
     out = depend_tensor_if(x)
-    loss = loss_func(out)
-    loss.backward()
+    out.backward()
+    # loss = loss_func(out)
+    # loss.backward()
     # print(x.grad)
     print("=== end ===")
 # print(to_static(depend_tensor_if).code)
