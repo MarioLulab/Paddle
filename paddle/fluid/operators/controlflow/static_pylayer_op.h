@@ -27,17 +27,10 @@ class StaticPyLayerOp : public framework::OperatorBase {
     static const char kOutputs[];
     static const char kScope[];
     static const char kSkipEagerDeletionVars[];
-
-    private:
-        void RunImpl(const framework::Scope & scope,
-                    const platform::Place &dev_place) const override;
-
-    private:
-        mutable std::shared_ptr<framework::InterpreterCore> core_{nullptr};
 };
 
 
-class StaticPyLayerOpProtoMaker : public framework::OpProtoAndCheckerMaker {
+class StaticPyLayerForwardOpProtoMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
     AddInput(StaticPyLayerOp::kInputs, "The input variables of the sub-block.")

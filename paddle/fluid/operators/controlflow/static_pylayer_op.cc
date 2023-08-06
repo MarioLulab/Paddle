@@ -14,69 +14,80 @@ const char StaticPyLayerOp::kOutputs[] = "Out";
 const char StaticPyLayerOp::kScope[] = "Scope";
 const char StaticPyLayerOp::kSkipEagerDeletionVars[] = "skip_eager_deletion_vars";
 
+class StaticPyLayerForwardOp : public StaticPyLayerOp {
+    public:
+        StaticPyLayerForwardOp(const std::string &type,
+                            const framework::VariableNameMap &inputs,
+                            const framework::VariableNameMap &outputs,
+                            const framework::AttributeMap &attrs)
+            : StaticPyLayerOp(type, inputs, outputs, attrs) {}
+    private:
+        void RunImpl(const framework::Scope & scope,
+                const platform::Place &dev_place) const{
+            // do nothing
+            auto *scope_var = scope.FindVar(Output(kScope));
+            PADDLE_ENFORCE_NOT_NULL(
+            scope_var,
+            platform::errors::PreconditionNotMet(
+                "Expect Scope variable to be set in static_pylayer_op, but "
+                "got a null Scope variable. Please set the Scope variable."));
 
-void StaticPyLayerOp::RunImpl(const framework::Scope & scope,
-        const platform::Place &dev_place) const{
-    // do nothing
-    auto *scope_var = scope.FindVar(Output(kScope));
-    PADDLE_ENFORCE_NOT_NULL(
-    scope_var,
-    platform::errors::PreconditionNotMet(
-        "Expect Scope variable to be set in static_pylayer_op, but "
-        "got a null Scope variable. Please set the Scope variable."));
+            auto *scopes = scope_var->GetMutable<std::vector<framework::Scope *>>();
+            scopes->resize(1);
+            scopes->front() = &scope.NewScope();
 
-    auto *scopes = scope_var->GetMutable<std::vector<framework::Scope *>>();
-    scopes->resize(1);
-    scopes->front() = &scope.NewScope();
+            auto &cur_scope = *scopes->front();
+            auto *block = Attr<framework::BlockDesc *>("sub_block");
+            VLOG(3) << "Conditional block.idx = " << block->ID()
+                    << ", scope = " << &cur_scope;
 
-    auto &cur_scope = *scopes->front();
-    auto *block = Attr<framework::BlockDesc *>("sub_block");
-    VLOG(3) << "Conditional block.idx = " << block->ID()
-            << ", scope = " << &cur_scope;
+            auto &skip_vars =
+                Attr<std::vector<std::string>>(kSkipEagerDeletionVars);
 
-    auto &skip_vars =
-        Attr<std::vector<std::string>>(kSkipEagerDeletionVars);
+            LOG_FIRST_N(INFO, 1)
+                << "[ControlFlow][StaticPyLayer] New Executor is Running.";
 
-    LOG_FIRST_N(INFO, 1)
-        << "[ControlFlow][StaticPyLayer] New Executor is Running.";
+            if (!core_ || !platform::is_same_place(core_->GetPlace(), dev_place)) {
+                VLOG(10) << "[interpreterCore cache]" << core_.get();
+                VLOG_IF(10, core_) << platform::is_same_place(core_->GetPlace(),
+                                                            dev_place);
 
-    if (!core_ || !platform::is_same_place(core_->GetPlace(), dev_place)) {
-        VLOG(10) << "[interpreterCore cache]" << core_.get();
-        VLOG_IF(10, core_) << platform::is_same_place(core_->GetPlace(),
-                                                    dev_place);
+                framework::interpreter::ExecutionConfig execution_config;
+                execution_config.create_local_scope = false;
+                execution_config.used_for_control_flow_op = true;
+                execution_config.skip_gc_vars =
+                    std::set<std::string>(skip_vars.begin(), skip_vars.end());
 
-        framework::interpreter::ExecutionConfig execution_config;
-        execution_config.create_local_scope = false;
-        execution_config.used_for_control_flow_op = true;
-        execution_config.skip_gc_vars =
-            std::set<std::string>(skip_vars.begin(), skip_vars.end());
+                core_.reset(new framework::InterpreterCore(
+                    dev_place, *block, &cur_scope, execution_config));
+                VLOG(10) << "[interpreterCore] created:" << core_;
+            } else {
+                // TODO: Add StaticPyLayer Helper ?
+                BuildScopeForControlFlowOp(*core_, *block, &cur_scope);
+                core_->reset_scope(&cur_scope);
+            }
 
-        core_.reset(new framework::InterpreterCore(
-            dev_place, *block, &cur_scope, execution_config));
-        VLOG(10) << "[interpreterCore] created:" << core_;
-    } else {
-        // TODO: Add StaticPyLayer Helper ?
-        BuildScopeForControlFlowOp(*core_, *block, &cur_scope);
-        core_->reset_scope(&cur_scope);
-    }
+            core_->Run({}, false);
+        }
 
-    core_->Run({}, false);
-}
+    private:
+      mutable std::shared_ptr<framework::InterpreterCore> core_{nullptr};
+};
 
-class StaticPyLayerInferShape : public framework::InferShapeBase {
+class StaticPyLayerForwardInferShape : public framework::InferShapeBase {
     public:
         void operator()(framework::InferShapeContext *context) const override {
             // do nothing
         }
 };
 
-class StaticPyLayerGradOp : public framework::OperatorBase {
+class StaticPyLayerBackwardOp : public StaticPyLayerOp {
     public:
-        StaticPyLayerGradOp(const std::string &type,
+        StaticPyLayerBackwardOp(const std::string &type,
                         const framework::VariableNameMap &inputs,
                         const framework::VariableNameMap &outputs,
                         const framework::AttributeMap &attrs)
-                    : framework::OperatorBase(type, inputs, outputs, attrs) {}
+                    : StaticPyLayerOp(type, inputs, outputs, attrs) {}
     
     private:
         void RunImpl(const framework::Scope & scope,
@@ -88,7 +99,7 @@ class StaticPyLayerGradOp : public framework::OperatorBase {
         mutable std::shared_ptr<framework::InterpreterCore> core_{nullptr};
 };
 
-class StaticPyLayerGradInferShape : public framework::InferShapeBase {
+class StaticPyLayerBackwardInferShape : public framework::InferShapeBase {
     public:
         void operator()(framework::InferShapeContext *context) const override {
             if (context->HasInputs(StaticPyLayerOp::kInputs) &&
@@ -100,7 +111,7 @@ class StaticPyLayerGradInferShape : public framework::InferShapeBase {
 };
 
 
-class StaticPyLayerGradInferVarType : public framework::VarTypeInference {
+class StaticPyLayerBackwardInferVarType : public framework::VarTypeInference {
     public:
         void operator()(framework::InferVarTypeContext *ctx) const override {
             auto input_size = ctx->InputSize(StaticPyLayerOp::kInputs);
@@ -152,7 +163,7 @@ struct FilterNoGradInput<framework::OpDesc> {
 };
 
 template <typename T>
-class StaticPyLayerGradMaker : public framework::SingleGradOpMaker<T> {
+class StaticPyLayerBackwardMaker : public framework::SingleGradOpMaker<T> {
     public:
         using framework::SingleGradOpMaker<T>::SingleGradOpMaker;
 
@@ -178,11 +189,11 @@ class StaticPyLayerGradMaker : public framework::SingleGradOpMaker<T> {
 
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(static_pylayer,
-                  ops::StaticPyLayerOp,
-                  ops::StaticPyLayerInferShape,
-                  ops::StaticPyLayerOpProtoMaker,
-                  ops::StaticPyLayerGradMaker<paddle::framework::OpDesc>);
+                  ops::StaticPyLayerForwardOp,
+                  ops::StaticPyLayerForwardInferShape,
+                  ops::StaticPyLayerForwardOpProtoMaker,
+                  ops::StaticPyLayerBackwardMaker<paddle::framework::OpDesc>);
 REGISTER_OPERATOR(static_pylayer_grad,
-                  ops::StaticPyLayerGradOp,
-                  ops::StaticPyLayerGradInferShape,
-                  ops::StaticPyLayerGradInferVarType);
+                  ops::StaticPyLayerBackwardOp,
+                  ops::StaticPyLayerBackwardInferShape,
+                  ops::StaticPyLayerBackwardInferVarType);
