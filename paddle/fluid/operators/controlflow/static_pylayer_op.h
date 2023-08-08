@@ -41,7 +41,9 @@ class StaticPyLayerForwardOpProtoMaker : public framework::OpProtoAndCheckerMake
     AddOutput(StaticPyLayerOp::kScope,
               "(std::vector<Scope*>) The scope of static pylayer block.");
     AddAttr<framework::BlockDesc *>(
-        "sub_block", "The step block of conditional block operator");
+        "forward_block", "The step block of conditional block operator");
+    AddAttr<framework::BlockDesc *>(
+        "backward_block", "The backward block of conditional block operator");
     AddComment(R"DOC(StaticPyLayer operator
 
 TO-DO: added by luqi

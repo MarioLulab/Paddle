@@ -37,7 +37,8 @@ class StaticPyLayerForwardOp : public StaticPyLayerOp {
             scopes->front() = &scope.NewScope();
 
             auto &cur_scope = *scopes->front();
-            auto *block = Attr<framework::BlockDesc *>("sub_block");
+            // auto *block = Attr<framework::BlockDesc *>("sub_block");
+            auto *block = Attr<framework::BlockDesc *>("forward_block");
             VLOG(3) << "Conditional block.idx = " << block->ID()
                     << ", scope = " << &cur_scope;
 
@@ -92,11 +93,110 @@ class StaticPyLayerBackwardOp : public StaticPyLayerOp {
     private:
         void RunImpl(const framework::Scope & scope,
                     const platform::Place &dev_place) const override {
-            // do nothing
-        }
+            const auto &inputs = Inputs(StaticPyLayerOp::kInputs);      //  "X"
+            const auto &outside_grads =
+                Outputs(framework::GradVarName(StaticPyLayerOp::kInputs));      // "X@GRAD"
+            std::vector<std::string> inside_grads;
+            inside_grads.reserve(inputs.size());
+            for (auto &in : inputs) {
+                inside_grads.emplace_back(framework::GradVarName(in));
+            }
+
+            // for debug
+            std::cout << "==============" << std::endl;
+            std::cout << "inside_grads = " << std::endl;
+            for (auto& item : inside_grads) {
+                std::cout << item << std::endl;
+            }
+
+            auto *scope_var = scope.FindVar(Input(StaticPyLayerOp::kScope));
+            PADDLE_ENFORCE_NOT_NULL(
+                scope_var,
+                platform::errors::PreconditionNotMet(
+                    "Expect Scope variable to be set in conditional_block_op, but "
+                    "got a null Scope variable. Please set the Scope variable."));
+            auto &scopes = scope_var->Get<std::vector<framework::Scope *>>();
+            PADDLE_ENFORCE_GT(
+                scopes.size(),
+                0,
+                platform::errors::InvalidArgument(
+                    "Expect Scope variable contains at least 1 scope, but got: %d",
+                    scopes.size()));
+            framework::Scope &cur_scope = *(scopes[0]);
+
+            // auto *block = Attr<framework::BlockDesc *>("sub_block");
+            auto *block = Attr<framework::BlockDesc *>("forward_block");
+            VLOG(3) << "Static PyLayer Grad block.idx = " << block->ID()
+                    << ", scope = " << &cur_scope;
+
+            LOG_FIRST_N(INFO, 1)
+                << "[ControlFlow][ConditionalGradBlock] New Executor is Running.";
+            if (!core_ || !platform::is_same_place(core_->GetPlace(), dev_place)) {
+                VLOG(10) << "[interpreterCore cache]" << core_.get();
+                VLOG_IF(10, core_) << platform::is_same_place(core_->GetPlace(),
+                                                            dev_place);
+
+                framework::interpreter::ExecutionConfig execution_config;
+                execution_config.create_local_scope = false;
+                execution_config.used_for_control_flow_op = true;
+                execution_config.skip_gc_vars =
+                    std::set<std::string>(inside_grads.begin(), inside_grads.end());
+
+                core_.reset(new framework::InterpreterCore(
+                    dev_place, *block, &cur_scope, execution_config));
+                VLOG(10) << "[interpreterCore] created:" << core_;
+            } else {
+                BuildScopeForControlFlowOp(*core_, *block, &cur_scope);
+                core_->reset_scope(&cur_scope);
+            }
+            core_->Run({}, false);
+
+            // necessary ?
+            AssignLocalGradientToParentScope(
+                dev_place, cur_scope, scope, inside_grads, outside_grads, inputs);
+            // Release the cur_scope, otherwise memory leakage occurs.
+            scope.DeleteScope(&cur_scope);
+            return;
+    }
 
     private:
         mutable std::shared_ptr<framework::InterpreterCore> core_{nullptr};
+
+    private:
+      void AssignLocalGradientToParentScope(
+      const platform::Place &place,
+      const framework::Scope &cur_scope,
+      const framework::Scope &parent_scope,
+      const std::vector<std::string> &inside_grads,
+      const std::vector<std::string> &outside_grads,
+      const std::vector<std::string> &inputs) const {
+        std::vector<std::string> assign_zero_outside_grads;
+        std::vector<std::string> assign_zero_inputs;
+        for (size_t i = 0; i < outside_grads.size(); ++i) {
+        const std::string &outside_grad_name = outside_grads[i];
+        const std::string &inside_grad_name = inside_grads[i];
+        VLOG(4) << "[assign local]"
+                << "inside_grad_name = " << inside_grad_name
+                << ", outside_grad_name = " << outside_grad_name;
+        framework::Variable *outside_var =
+            parent_scope.FindVar(outside_grad_name);
+        if (outside_var == nullptr) {
+            continue;
+        }
+        framework::Variable *inside_var =
+            cur_scope.FindLocalVar(inside_grad_name);
+        if (inside_var == nullptr) {
+            assign_zero_outside_grads.emplace_back(outside_grad_name);
+            assign_zero_inputs.emplace_back(inputs[i]);
+            continue;
+        }
+        platform::DeviceContext *dev_ctx =
+            platform::DeviceContextPool::Instance().Get(place);
+        framework::VisitVarType(*inside_var,
+                                AssignFunctor(outside_var, *dev_ctx));
+        }
+    }
+
 };
 
 class StaticPyLayerBackwardInferShape : public framework::InferShapeBase {
@@ -170,17 +270,25 @@ class StaticPyLayerBackwardMaker : public framework::SingleGradOpMaker<T> {
     protected:
         void Apply(GradOpPtr<T> grad_op) const override {
             grad_op->SetType("static_pylayer_grad");
+            // NOTE: Just For TypeInfer in GradOp
+            grad_op->SetInput(StaticPyLayerOp::kInputs,
+                            this->Input(StaticPyLayerOp::kInputs));
             grad_op->SetInput(framework::GradVarName(StaticPyLayerOp::kOutputs),
-                              this->OutputGrad(StaticPyLayerOp::kOutputs));
+                              this->OutputGrad(StaticPyLayerOp::kOutputs)); // second is `var` name
             grad_op->SetInput(StaticPyLayerOp::kScope,
                             this->Output(StaticPyLayerOp::kScope));
 
             auto fwd_inputs = this->InputGrad(StaticPyLayerOp::kInputs, false);
-            FilterNoGradInput<T>::filter(this->GetForwardOpBlock(), &fwd_inputs);
+            // NOTE: no need to filt
+            // FilterNoGradInput<T>::filter(this->GetForwardOpBlock(), &fwd_inputs);
             grad_op->SetOutput(framework::GradVarName(StaticPyLayerOp::kInputs),
                             fwd_inputs);
-            grad_op->SetBlockAttr("sub_block", this->grad_block_[0]);
+            // grad_op->SetBlockAttr("sub_block", this->grad_block_[0]);
+            // grad_op->SetBlockAttr("sub_block", this->Attr<framework::BlockDesc *>("backward_block"));
+            // grad_op->SetBlockAttr("sub_block", PADDLE_GET_CONST(framework::BlockDesc *, this->GetAttr("backward_block")));
+            grad_op->SetBlockAttr("forward_block", PADDLE_GET_CONST(framework::BlockDesc *, this->GetAttr("backward_block")));
         }
+
 };
 
 }   // namespace operators

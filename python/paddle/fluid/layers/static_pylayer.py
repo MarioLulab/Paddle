@@ -130,6 +130,10 @@ class StaticPyLayerBlock:
     def inside_block_index(self):
         return self.block_id
     
+    @property
+    def op_index(self):
+        return self.op_id
+    
     def complete(self):        
         inside_block = self.helper.main_program.current_block()
         parent_block = self.helper.main_program.block(inside_block.parent_idx)
@@ -175,6 +179,8 @@ class StaticPyLayerBlock:
                 "Scope": [step_scope]
             },
             attrs={
-                'sub_block': inside_block,
+                'forward_block': inside_block,
+                'backward_block': inside_block
             }
         )
+        self.op_id = static_pylayer_op.idx

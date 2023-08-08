@@ -2,27 +2,21 @@ import paddle
 from paddle.jit import to_static
 from paddle.fluid.framework import default_main_program
 
-def pylayer_forward(x):
+def true_func(x):
     z = paddle.sum(x)
     return z
 
-def pylayer_backward(x):
-    # z = paddle.max(x)
-    # z = x * (1 - paddle.square(x))
+def false_func(x):
     z = paddle.pow(x, 2)
     return z
-
-def loss_func(x):
-    loss_out = paddle.mean(x)
-    return loss_out
 
 @to_static
 def depend_tensor_if(x):
     print("hello world")
     if paddle.min(x) > 5.:         # <---- Bool Tensor 类型
-        out = pylayer_forward(x)
+        out = true_func(x)
     else:
-        out = pylayer_backward(x)
+        out = false_func(x)
     
     out = paddle.mean(out)
     return out
