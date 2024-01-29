@@ -894,7 +894,7 @@ class IdxHelper {
     index[Rank - 1] = remaining;
   }
 
- private:
+ protected:
   IndexT stride_[Rank];
 };
 
@@ -912,6 +912,15 @@ class IdxHelper<uint32_t, Rank> {
 
   __device__ __forceinline__ uint32_t GetStride(int idx) const {
     return stride_[idx];
+  }
+
+  __device__ __forceinline__ void SetStride(int idx, uint32_t stride) {
+    stride_[idx] = stride;
+  }
+
+
+  __device__ __forceinline__ void ResetDivModer(int idx, uint32_t value) {
+    divmoder_[idx] = phi::kps::details::FastDivMod(value);
   }
 
   __device__ __forceinline__ void GetIndexFromOffset(uint32_t offset,
@@ -955,9 +964,48 @@ class IdxAndOffsetHelper {
     index_helper.GetIndexFromOffset(offset, index);
   }
 
- private:
+  __device__ __forceinline__ IndexT GetStride(int idx) const {
+    return index_helper.GetStride(idx);
+  }
+
+ protected:
   IdxHelper<IndexT, Rank> index_helper;
 };
+
+
+template <typename IndexT, int Rank>
+class IdxAndOffsetStrideHelper  : public IdxAndOffsetHelper<IndexT, Rank> {
+ public:
+  IdxAndOffsetStrideHelper() = default;
+  explicit IdxAndOffsetStrideHelper(const IndexT* strides) {
+    for (int i = Rank - 1; i >= 0; --i) {
+      index_helper.stride_[i] = strides[i];
+    }
+  }
+  private:
+  using IdxAndOffsetHelper<IndexT, Rank>::index_helper;
+};
+
+template <int Rank>
+class IdxAndOffsetStrideHelper<uint32_t, Rank>  : public IdxAndOffsetHelper<uint32_t, Rank> {
+ public:
+  IdxAndOffsetStrideHelper() = default;
+  explicit IdxAndOffsetStrideHelper(const uint32_t* strides){
+    index_helper = IdxHelper<uint32_t, Rank>(strides);
+    VLOG(4) << "========== begin IdxAndOffsetStrideHelper";
+    for (int i = Rank - 1; i >= 0; --i) {
+      VLOG(4) << "========== " << i;
+      uint32_t value = static_cast<uint32_t>(strides[i]);
+      VLOG(4) << "========== begin ResetDivModer";
+      index_helper.ResetDivModer(i, value);
+      VLOG(4) << "========== begin SetStride";
+      index_helper.SetStride(i, value);
+    }
+  }
+  private:
+  using IdxAndOffsetHelper<uint32_t, Rank>::index_helper;
+};
+
 
 template <typename IndexT, int Rank>
 struct PermuteParams {

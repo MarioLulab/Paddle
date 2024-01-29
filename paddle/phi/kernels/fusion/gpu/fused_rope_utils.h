@@ -15,6 +15,7 @@
 #pragma once
 
 #include "paddle/phi/kernels/funcs/aligned_vector.h"
+#include "paddle/phi/kernels/funcs/transpose_function.cu.h"
 
 namespace phi {
 namespace fusion {
@@ -48,24 +49,25 @@ struct FusedRopeParam{
   phi::Array<int64_t, NDim> strides;
 };
 
-template <typename IndexT, int Rank>
+template <int Rank>
 struct DataPermuteParam{
   public:
-    DataPermuteParam(const std::vector<int64_t>& dims, const std::vector<int64_t>& strides, const std::vector<int>& perm) {
-      static_assert(dims.size() == Rank, "dims.size() should equal to Rank");
-      IndexT dst_strides[Rank];
+    DataPermuteParam(const int64_t* dims, const int64_t* strides, const std::vector<int>& perm) {
+      uint32_t dst_strides[Rank];
       for (auto i = 0; i < Rank; ++i) {
-        permuted_dims[i] = static_cast<IndexT>(dims[perm_[i]]);
-        dst_strides[i] = static_cast<IndexT>(strides[perm[i]]);
+        permuted_dims[i] = static_cast<uint32_t>(dims[perm[i]]);
+        dst_strides[i] = static_cast<uint32_t>(strides[perm[i]]);
       }
-      permuted_contiguous_helper = IdxAndOffsetHelper<IndexT, Rank>(permuted_dims);  // contiguous
-      permuted_non_contiguous_helper = IdxAndOffsetStrideHelper<IndexT, Rank>(dst_strides);  
+      VLOG(4) << "======= before permuted_contiguous_helper instance ======";
+      permuted_contiguous_helper = phi::funcs::IdxAndOffsetHelper<uint32_t, Rank>(permuted_dims);  // contiguous
+      VLOG(4) << "======= before permuted_non_contiguous_helper instance ======";
+      permuted_non_contiguous_helper = phi::funcs::IdxAndOffsetStrideHelper<uint32_t, Rank>(dst_strides);  
     }
 
   public:
-    IdxAndOffsetStrideHelper<IndexT, Rank> permuted_non_contiguous_helper;  // non-contiguous
-    IdxAndOffsetHelper<IndexT, Rank> permuted_contiguous_helper;  // contiguous
-    IndexT permuted_dims[Rank]{};
+    phi::funcs::IdxAndOffsetStrideHelper<uint32_t, Rank> permuted_non_contiguous_helper;  // non-contiguous
+    phi::funcs::IdxAndOffsetHelper<uint32_t, Rank> permuted_contiguous_helper;  // contiguous
+    uint32_t permuted_dims[Rank];
 };
 
 template <typename T, typename MPType, int VecSize = 2>
@@ -126,7 +128,7 @@ __device__ void VectorizedGetSinCos_new(phi::Array<const T*, 2> sin_cos_data,
                                     const int64_t* position_ids_data,
                                     bool flag_sin_cos,
                                     int64_t index,
-                                    FusedRopeParam<4> param,
+                                    DataPermuteParam<4> param,
                                     MPType* out_sin,
                                     MPType* out_cos,
                                     MPType div_c) {
@@ -139,18 +141,24 @@ __device__ void VectorizedGetSinCos_new(phi::Array<const T*, 2> sin_cos_data,
   if (flag_sin_cos) {
 #pragma unroll
     for (int64_t nx = 0; nx < VecSize; ++nx) {
-      int64_t pos_seq_ori = ((index + nx) / param.strides[2]) % param.dims[2];
+      // int64_t pos_seq_ori = ((index + nx) / param.strides[2]) % param.dims[2];
+      uint32_t indices[4];
+      param.permuted_contiguous_helper.OffsetToIndex(index + nx, indices);
+      uint32_t pos_seq_ori = indices[2];
 
-      int64_t pos_seq;
+      uint32_t pos_seq;
       if (position_ids_data) {
-        int64_t pos_bs = ((index + nx) / param.strides[1]) % param.dims[1];
-        int64_t index_ids = pos_bs * param.dims[2] + pos_seq_ori;
+        // int64_t pos_bs = ((index + nx) / param.strides[1]) % param.dims[1];
+        uint32_t pos_bs = indices[1];
+        uint32_t index_ids = pos_bs * param.permuted_dims[2] + pos_seq_ori;
         pos_seq = position_ids_data[index_ids];
       } else {
         pos_seq = pos_seq_ori;
       }
-      int64_t pos_head = ((index + nx) / param.strides[3]) % param.dims[3];
-      int64_t index_sc = pos_seq * param.strides[2] + pos_head;
+      // int64_t pos_head = ((index + nx) / param.strides[3]) % param.dims[3];
+      uint32_t pos_head = indices[3];
+      // int64_t index_sc = pos_seq * param.strides[2] + pos_head;
+      int64_t index_sc = pos_seq * param.permuted_contiguous_helper.GetStride(2) + pos_head;
       const T* sin_input = sin_cos_data[0] + index_sc;
       const T* cos_input = sin_cos_data[1] + index_sc;
 
@@ -332,7 +340,8 @@ __global__ void VectorizedFusedRopeWithRotateHalfKernel_new(
     bool flag_sin_cos,
     int sign,
     phi::Array<int64_t, NInputs> inputs_num_heads,
-    FusedRopeParam<4> param,
+    DataPermuteParam<4> param_q,
+    DataPermuteParam<4> param_k,
     phi::Array<T*, NInputs> outs_data,
     int num_inputs,
     MPType div_c,
@@ -348,7 +357,7 @@ __global__ void VectorizedFusedRopeWithRotateHalfKernel_new(
       VecSize;
   int64_t stride = static_cast<int64_t>(gridDim.x) *
                    static_cast<int64_t>(blockDim.x) * VecSize;
-  int64_t size = param.dims[0] * param.dims[1] * param.dims[2] * param.dims[3];
+  int64_t size = param_q.permuted_dims[0] * param_q.permuted_dims[1] * param_q.permuted_dims[2] * param_q.permuted_dims[3];
   MPType sin_value[VecSize];
   MPType cos_value[VecSize];
   MPType result[VecSize];
@@ -359,55 +368,80 @@ __global__ void VectorizedFusedRopeWithRotateHalfKernel_new(
 
     // param_contiguous with dims [h, bs, seq_len, head_dim]
     // param_contiguous with stides [bs*seq_len*head_dim, seq_len*head_dim, head_dim, 1]
-    FusedRopeParam<4> param_contiguous {param.dims, param.strides};
-    param_contiguous.strides[0] = param_contiguous.dims[1] * param_contiguous.dims[2] * param_contiguous.dims[3];
-    param_contiguous.strides[1] = param_contiguous.dims[2] * param_contiguous.dims[3];
-    param_contiguous.strides[2] = param_contiguous.dims[3];
-    param_contiguous.strides[3] = 1;
+
+    // FusedRopeParam<4> param_contiguous {param.dims, param.strides};
+    // param_contiguous.strides[0] = param_contiguous.dims[1] * param_contiguous.dims[2] * param_contiguous.dims[3];
+    // param_contiguous.strides[1] = param_contiguous.dims[2] * param_contiguous.dims[3];
+    // param_contiguous.strides[2] = param_contiguous.dims[3];
+    // param_contiguous.strides[3] = 1;
+
+    // VectorizedGetSinCos_new(sin_cos_data,
+    //                     position_ids_data,
+    //                     flag_sin_cos,
+    //                     index_contiguous,  // contiguous
+    //                     param_contiguous,
+    //                     sin_value,
+    //                     cos_value,
+    //                     div_c);
 
     VectorizedGetSinCos_new(sin_cos_data,
                         position_ids_data,
                         flag_sin_cos,
                         index_contiguous,  // contiguous
-                        param_contiguous,
+                        param_q,
                         sin_value,
                         cos_value,
                         div_c);
 
       // contiguous index -> non-contiguous index
-      int64_t index_h = (index_contiguous / param_contiguous.strides[0]) % param_contiguous.dims[0];
-      int64_t index_bs = (index_contiguous / param_contiguous.strides[1]) % param_contiguous.dims[1];
-      int64_t index_seq = (index_contiguous / param_contiguous.strides[2]) % param_contiguous.dims[2];
-      int64_t index_dim = (index_contiguous / param_contiguous.strides[3]) % param_contiguous.dims[3];
+      uint32_t indices_non_contiguous[4];
+      param_q.permuted_non_contiguous_helper.OffsetToIndex(index_contiguous, indices_non_contiguous);
+
+      // int64_t index_h = (index_contiguous / param_contiguous.strides[0]) % param_contiguous.dims[0];
+      // int64_t index_bs = (index_contiguous / param_contiguous.strides[1]) % param_contiguous.dims[1];
+      // int64_t index_seq = (index_contiguous / param_contiguous.strides[2]) % param_contiguous.dims[2];
+      // int64_t index_dim = (index_contiguous / param_contiguous.strides[3]) % param_contiguous.dims[3];
 
     // use rotate_half mode
-    int stride_r = param.dims[3] / 2;
+    // int stride_r = param.dims[3] / 2;
+    int stride_r = param_q.permuted_dims[3] / 2;
 #pragma unroll
     for (int iter = 0; iter < NInputs; iter++) {
       if (iter >= num_inputs) break;
 
-      if (index_h >= inputs_num_heads[iter]) break;
+      // if (index_h >= inputs_num_heads[iter]) break;
+      if (indices_non_contiguous[0] >= inputs_num_heads[iter]) break; // index_h
 
       // get value_index and rotate_half_index
-      int64_t index_non_contiguous = 0;
+      // int64_t index_non_contiguous = 0;
+      uint32_t index_non_contiguous = 0;
       if (iter == 0){
-        index_non_contiguous = index_h * param.strides[0] + \
-                                      index_bs * param.strides[1] + \
-                                      index_seq * param.strides[2] + \
-                                      index_dim * param.strides[3];  // non-contiguous
+        // index_non_contiguous = index_h * param_q.strides[0] + \
+        //                               index_bs * param.strides[1] + \
+        //                               index_seq * param.strides[2] + \
+        //                               index_dim * param.strides[3];  // non-contiguous
 
+        index_non_contiguous = param_q.permuted_non_contiguous_helper.IndexToOffset(indices_non_contiguous);
+        
       }
       else{
-        index_non_contiguous = index_h * param.strides[0] + \
-                                      index_bs * param.strides[1] / multiply_heads + \
-                                      index_seq * param.strides[2] / multiply_heads + \
-                                      index_dim * param.strides[3];  // non-contiguous
+        // index_non_contiguous = index_h * param.strides[0] + \
+        //                               index_bs * param.strides[1] / multiply_heads + \
+        //                               index_seq * param.strides[2] / multiply_heads + \
+        //                               index_dim * param.strides[3];  // non-contiguous
+        
+        index_non_contiguous = param_k.permuted_non_contiguous_helper.IndexToOffset(indices_non_contiguous);
       }
 
+      // int index_v = index_non_contiguous;
+      // int index_r = (index_non_contiguous % param.dims[3]) < stride_r ? (index_non_contiguous + stride_r)
+      //                                             : (index_non_contiguous - stride_r);
+      // MPType sign_r = (index_non_contiguous % param.dims[3]) < stride_r ? static_cast<MPType>(-1)
+      //                                               : static_cast<MPType>(1);
       int index_v = index_non_contiguous;
-      int index_r = (index_non_contiguous % param.dims[3]) < stride_r ? (index_non_contiguous + stride_r)
+      int index_r = (index_non_contiguous % param_q.permuted_dims[3]) < stride_r ? (index_non_contiguous + stride_r)
                                                   : (index_non_contiguous - stride_r);
-      MPType sign_r = (index_non_contiguous % param.dims[3]) < stride_r ? static_cast<MPType>(-1)
+      MPType sign_r = (index_non_contiguous % param_q.permuted_dims[3]) < stride_r ? static_cast<MPType>(-1)
                                                     : static_cast<MPType>(1);
 
       const T* input_v = ins_data[iter] + index_v;

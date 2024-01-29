@@ -35,6 +35,9 @@ void FusedRopeKernel(const Context& dev_ctx,
                      DenseTensor* out_q,
                      DenseTensor* out_k,
                      DenseTensor* out_v) {
+
+  VLOG(4) << "======= enter FusedRopeKernel ======";
+
   int64_t numel = q.numel();
   if (numel <= 0) return;
   dev_ctx.template Alloc<T>(out_q);
@@ -56,6 +59,9 @@ void FusedRopeKernel(const Context& dev_ctx,
 
   auto config =
       phi::backends::gpu::GetGpuLaunchConfig1D(dev_ctx, numel, vec_size);
+
+  VLOG(4) << "======= after GetGpuLaunchConfig1D in FusedRopeKernel======";
+
 
   int64_t grid = config.block_per_grid.x;
   int64_t block = config.thread_per_block.x;
@@ -183,37 +189,29 @@ void FusedRopeKernel(const Context& dev_ctx,
   int sign = 1;
   if (true) { // **force-true** for testing
 
-    // VectorizedFusedRopeCudaKernelFunc<T, MPType, 3, vec_size> kernel_func_qkv =
-    //     use_neox_rotary_style
-    //         ? VectorizedFusedRopeWithRotateEveryTwoKernel<T,
-    //                                                       MPType,
-    //                                                       3,
-    //                                                       vec_size>
-    //         : VectorizedFusedRopeWithRotateHalfKernel<T, MPType, 3, vec_size>;
 
-    // kernel_func_qkv<<<grid, block, 0, stream>>>(ins_data,
-    //                                             sin_cos_data,
-    //                                             position_ids_data,
-    //                                             flag_sin_cos,
-    //                                             sign,
-    //                                             batch_size,
-    //                                             seq_len,
-    //                                             inputs_num_heads[0],
-    //                                             head_dim,
-    //                                             outs_data,
-    //                                             num_inputs,
-    //                                             div_c);
+    VLOG(4) << "======= before instantialize DataPermuteParam======";
 
     // optimize it (using DenseTensor methods):
-    phi::Array<int64_t, 4> non_contiguous_dims {inputs_num_heads[0], batch_size, seq_len, head_dim};
-    phi::Array<int64_t, 4> non_contiguous_strides {head_dim, 
-                                    inputs_num_heads[0] * seq_len * head_dim,
-                                    inputs_num_heads[0] * head_dim,
-                                    1};
+    // phi::Array<int64_t, 4> non_contiguous_dims {inputs_num_heads[0], batch_size, seq_len, head_dim};
+    // phi::Array<int64_t, 4> non_contiguous_strides {head_dim, 
+    //                                 inputs_num_heads[0] * seq_len * head_dim,
+    //                                 inputs_num_heads[0] * head_dim,
+    //                                 1};
 
-    FusedRopeParam<4> param_non_contiguous (non_contiguous_dims, non_contiguous_strides);
+    // FusedRopeParam<4> param_non_contiguous (non_contiguous_dims, non_contiguous_strides);
 
     int64_t multiply_heads = inputs_num_heads[0] / inputs_num_heads[1];
+    VLOG(4) << "======= multiply_heads: " << multiply_heads;
+
+    std::vector<int> perm {2, 0, 1, 3};
+    VLOG(4) << "======= before param_q instance ======";
+    VLOG(4) << q.dims();
+    VLOG(4) << q.strides();
+    DataPermuteParam<4> param_q(q.dims().Get(), q.strides().Get(), perm);
+    VLOG(4) << "======= param_q instance success ======";
+    DataPermuteParam<4> param_k(k.get().dims().Get(), k.get().strides().Get(), perm);
+    VLOG(4) << "========= before VectorizedFusedRopeWithRotateHalfKernel_new ========";
     VectorizedFusedRopeWithRotateHalfKernel_new<T, MPType, 3, vec_size>
       <<<grid, block, 0, stream>>>(
           ins_data,
@@ -222,11 +220,15 @@ void FusedRopeKernel(const Context& dev_ctx,
           flag_sin_cos,
           sign,
           inputs_num_heads,
-          param_non_contiguous,
+          param_q,
+          param_k,
           outs_data,
           num_inputs,
           div_c,
           multiply_heads);
+
+    VLOG(4) << "========= after VectorizedFusedRopeWithRotateHalfKernel_new ========";
+
   } else {
     // Multi Query Attention (MQA) or Group Query Attention (GQA)
     PADDLE_ENFORCE_EQ(
