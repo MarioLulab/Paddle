@@ -181,27 +181,52 @@ void FusedRopeKernel(const Context& dev_ctx,
   }
 
   int sign = 1;
-  if (is_same_num_heads) {
-    VectorizedFusedRopeCudaKernelFunc<T, MPType, 3, vec_size> kernel_func_qkv =
-        use_neox_rotary_style
-            ? VectorizedFusedRopeWithRotateEveryTwoKernel<T,
-                                                          MPType,
-                                                          3,
-                                                          vec_size>
-            : VectorizedFusedRopeWithRotateHalfKernel<T, MPType, 3, vec_size>;
+  if (true) { // **force-true** for testing
 
-    kernel_func_qkv<<<grid, block, 0, stream>>>(ins_data,
-                                                sin_cos_data,
-                                                position_ids_data,
-                                                flag_sin_cos,
-                                                sign,
-                                                batch_size,
-                                                seq_len,
-                                                inputs_num_heads[0],
-                                                head_dim,
-                                                outs_data,
-                                                num_inputs,
-                                                div_c);
+    // VectorizedFusedRopeCudaKernelFunc<T, MPType, 3, vec_size> kernel_func_qkv =
+    //     use_neox_rotary_style
+    //         ? VectorizedFusedRopeWithRotateEveryTwoKernel<T,
+    //                                                       MPType,
+    //                                                       3,
+    //                                                       vec_size>
+    //         : VectorizedFusedRopeWithRotateHalfKernel<T, MPType, 3, vec_size>;
+
+    // kernel_func_qkv<<<grid, block, 0, stream>>>(ins_data,
+    //                                             sin_cos_data,
+    //                                             position_ids_data,
+    //                                             flag_sin_cos,
+    //                                             sign,
+    //                                             batch_size,
+    //                                             seq_len,
+    //                                             inputs_num_heads[0],
+    //                                             head_dim,
+    //                                             outs_data,
+    //                                             num_inputs,
+    //                                             div_c);
+
+    // optimize it (using DenseTensor methods):
+    phi::Array<int64_t, 4> non_contiguous_dims {inputs_num_heads[0], batch_size, seq_len, head_dim};
+    phi::Array<int64_t, 4> non_contiguous_strides {head_dim, 
+                                    inputs_num_heads[0] * seq_len * head_dim,
+                                    inputs_num_heads[0] * head_dim,
+                                    1};
+
+    FusedRopeParam<4> param_non_contiguous (non_contiguous_dims, non_contiguous_strides);
+
+    int64_t multiply_heads = inputs_num_heads[0] / inputs_num_heads[1];
+    VectorizedFusedRopeWithRotateHalfKernel_new<T, MPType, 3, vec_size>
+      <<<grid, block, 0, stream>>>(
+          ins_data,
+          sin_cos_data,
+          position_ids_data,
+          flag_sin_cos,
+          sign,
+          inputs_num_heads,
+          param_non_contiguous,
+          outs_data,
+          num_inputs,
+          div_c,
+          multiply_heads);
   } else {
     // Multi Query Attention (MQA) or Group Query Attention (GQA)
     PADDLE_ENFORCE_EQ(
