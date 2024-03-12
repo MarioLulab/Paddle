@@ -33,9 +33,9 @@ def set_random_seed(seed, dp_id, rank_id):
     paddle.seed(seed + dp_id)
 
 
-batch_size = 8
+batch_size = 24
 length = 8
-micro_batch_size = 2
+micro_batch_size = 4
 num_virtual_pipeline_stages = 2
 vocab_size = 128
 hidden_size = 16
@@ -120,7 +120,7 @@ class CriterionPipe(Layer):
 
 
 class ModelPipe(PipelineLayer):
-    def __init__(self, topology, transformer_layer_num: int = 8):
+    def __init__(self, topology, transformer_layer_num: int = 6):
         self.descs = []
         self.descs.append(LayerDesc(EmbeddingPipe))
         for x in range(transformer_layer_num):
@@ -142,7 +142,7 @@ class TestDistPPTraining(unittest.TestCase):
         strategy = fleet.DistributedStrategy()
         self.model_parallel_size = 1
         self.data_parallel_size = 1
-        self.pipeline_parallel_size = 2
+        self.pipeline_parallel_size = 3
         strategy.hybrid_configs = {
             "dp_degree": self.data_parallel_size,
             "mp_degree": self.model_parallel_size,
